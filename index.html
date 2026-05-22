@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Go SMTP Gateway Dashboard</title>
+    <style>
+        /* 💡 100% 局域网纯离线企业级自包含 UI 框架 */
+        :root {
+            --primary: #0284c7;
+            --primary-hover: #0369a1;
+            --bg: #f8fafc;
+            --card-bg: #ffffff;
+            --text: #1e293b;
+            --text-light: #64748b;
+            --border: #e2e8f0;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: var(--bg); color: var(--text); padding: 30px; line-height: 1.5; }
+        .container { max-width: 1000px; margin: 0 auto; }
+        header { margin-bottom: 30px; }
+        header h2 { margin-bottom: 5px; color: #0f172a; }
+        header p { color: var(--text-light); font-size: 14px; }
+        .alert { background-color: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; padding: 12px 20px; border-radius: 6px; margin-bottom: 25px; font-size: 14px; font-weight: 600; }
+        .card { background: var(--card-bg); padding: 25px; margin-bottom: 25px; border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05); }
+        h3 { font-size: 18px; color: #0f172a; border-bottom: 2px solid var(--primary); padding-bottom: 6px; margin-bottom: 20px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 20px; margin-bottom: 15px; }
+        .form-group { margin-bottom: 15px; display: flex; flex-direction: column; }
+        label { font-size: 14px; font-weight: 600; margin-bottom: 6px; color: #334155; }
+        input[type="text"], input[type="number"], input[type="url"], select, textarea { width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; color: var(--text); background-color: #fff; outline: none; transition: border 0.2s; }
+        input:focus, select:focus, textarea:focus { border-color: var(--primary); }
+        textarea { font-family: "Courier New", Courier, monospace; background-color: #f8fafc; resize: vertical; }
+        .checkbox-group { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 14px; }
+        .checkbox-group input { width: 16px; height: 16px; cursor: pointer; }
+        .btn { display: inline-block; width: 100%; padding: 12px; background-color: var(--primary); color: #fff; border: none; border-radius: 6px; font-size: 15px; font-weight: 600; cursor: pointer; text-align: center; transition: background 0.2s; }
+        .btn:hover { background-color: var(--primary-hover); }
+        ::placeholder { color: #cbd5e1; }
+    </style>
+</head>
+<body>
+<main class="container">
+    <header>
+        <h2>🛠️ 工业级邮件转 Webhook 可视化代理网关</h2>
+        <p>独立内网安全运行中。修改配置即时热加载至核心内存，无需重启服务。</p>
+    </header>
+
+    <!-- 提示消息回显 -->
+    {{if .Message}}
+    <div class="alert">
+        {{.Message}}
+    </div>
+    {{end}}
+
+    <form method="POST" action="/save">
+        <!-- 1. 服务端底层配置回显 -->
+        <section class="card">
+            <h3>🌐 服务端底层组态配置</h3>
+            <div class="grid">
+                <div class="form-group">
+                    <label>网关网络监听端口 (Addr)</label>
+                    <input type="text" name="server_addr" value="{{.Config.Server.Addr}}" required>
+                </div>
+                <div class="form-group">
+                    <label>宣告反向解析域名 (Helo Domain)</label>
+                    <input type="text" name="server_domain" value="{{.Config.Server.Domain}}" required>
+                </div>
+                <div class="form-group">
+                    <label>单信最大防御带宽限制 (Max Bytes)</label>
+                    <input type="number" name="server_max_bytes" value="{{.Config.Server.MaxMessageBytes}}" required>
+                </div>
+            </div>
+            <div class="checkbox-group">
+                <input type="checkbox" id="auth_enabled" name="server_auth_enabled" value="true" {{if .Config.Server.AuthEnabled}}checked{{end}}>
+                <label for="auth_enabled">强制启用全网发信客户端强身份密码校验 (AUTH)</label>
+            </div>
+        </section>
+
+        <!-- 2. 发信安全凭证回显 -->
+        <section class="card">
+            <h3>🔐 客户端安全连接凭证与发件身份绑定</h3>
+            {{with index .Config.Credentials 0}}
+            <div class="grid">
+                <div class="form-group">
+                    <label>SMTP 用户名</label>
+                    <input type="text" name="cred_user" value="{{.Username}}" required>
+                </div>
+                <div class="form-group">
+                    <label>SMTP 密匙令牌</label>
+                    <input type="text" name="cred_pass" value="{{.Password}}" required>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>该凭证允许指代的发件人白名单匹配规则 (支持正则，.* 代表不限制)</label>
+                <input type="text" name="cred_allowed_sender" value="{{if .AllowedSenders}}{{ (index .AllowedSenders 0).Match }}{{else}}.*{{end}}">
+            </div>
+            {{else}}
+            <div class="grid">
+                <div class="form-group">
+                    <label>SMTP 用户名</label>
+                    <input type="text" name="cred_user" value="app_service" required>
+                </div>
+                <div class="form-group">
+                    <label>SMTP 密匙令牌</label>
+                    <input type="text" name="cred_pass" value="Password123" required>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>该凭证允许指代的发件人白名单正则</label>
+                <input type="text" name="cred_allowed_sender" value=".*">
+            </div>
+            {{end}}
+        </section>
+
+        <!-- 3. 默认兜底 Webhook 回显 -->
+        <section class="card">
+            <h3>🪂 默认兜底转发端点 (Default Webhook)</h3>
+            <div class="grid">
+                <div class="form-group">
+                    <label>全局兜底 URL</label>
+                    <input type="url" name="default_url" value="{{.Config.DefaultWebhook.URL}}" required>
+                </div>
+                <div class="form-group">
+                    <label>请求方法</label>
+                    <select name="default_method">
+                        <option value="POST" {{if eq .Config.DefaultWebhook.Method "POST"}}selected{{end}}>POST</option>
+                        <option value="PUT" {{if eq .Config.DefaultWebhook.Method "PUT"}}selected{{end}}>PUT</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>兜底请求 JSON 结构定义</label>
+                <textarea name="default_body" rows="3" required>{{.Config.DefaultWebhook.BodyTemplate}}</textarea>
+            </div>
+        </section>
+
+        <!-- 4. 核心路由清洗转发规则回显 -->
+        <section class="card">
+            <h3>🛣️ 级联双向路由拦截与清洗策略编排</h3>
+            {{with index .Config.Routes 0}}
+            <div class="grid">
+                <div class="form-group">
+                    <label>拦截发件人正则 (From Match)</label>
+                    <input type="text" name="route_from" value="{{.FromMatch}}" placeholder="留空代表通配任意发件人">
+                </div>
+                <div class="form-group">
+                    <label>拦截收件人精确串 (To Match)</label>
+                    <input type="text" name="route_to" value="{{.ToMatch}}" placeholder="例如: ops@yourdomain.com" required>
+                </div>
+            </div>
+            <div class="grid">
+                <div class="form-group">
+                    <label>目标 Webhook API 端点</label>
+                    <input type="url" name="route_webhook_url" value="{{.Webhook.URL}}" required>
+                </div>
+                <div class="form-group">
+                    <label>请求 Method</label>
+                    <select name="route_method">
+                        <option value="POST" {{if eq .Webhook.Method "POST"}}selected{{end}}>POST</option>
+                        <option value="PUT" {{if eq .Webhook.Method "PUT"}}selected{{end}}>PUT</option>
+                    </select>
+                </div>
+            </div>
+            <div class="grid">
+                <div class="form-group">
+                    <label>正文抽取清洗模式</label>
+                    <select name="route_body_mode">
+                        <option value="html_prefer" {{if eq .Webhook.ProcessingStrategy.BodyMode "html_prefer"}}selected{{end}}>html_prefer (富文本智能降级)</option>
+                        <option value="text_only" {{if eq .Webhook.ProcessingStrategy.BodyMode "text_only"}}selected{{end}}>text_only (清洗多余标签只留文本)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>普通附件可插拔存储后端指派</label>
+                    <select name="route_attach_store">
+                        <option value="ignore" {{if eq .Webhook.ProcessingStrategy.AttachmentStorage "ignore"}}selected{{end}}>ignore (直接内存丢弃不占带宽)</option>
+                        <option value="tg_storage" {{if eq .Webhook.ProcessingStrategy.AttachmentStorage "tg_storage"}}selected{{end}}>tg_storage (激活 Telegram 多媒体独立表单发送通道)</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>自定义可编排业务 Body 模板 (支持注入 {uuid}、{from}、{subject}、{text_prefer} 占位符)</label>
+                <textarea name="route_body" rows="6" required>{{.Webhook.BodyTemplate}}</textarea>
+            </div>
+            {{else}}
+            <div class="grid">
+                <div class="form-group">
+                    <label>拦截发件人正则 (From Match)</label>
+                    <input type="text" name="route_from" value="">
+                </div>
+                <div class="form-group">
+                    <label>拦截收件人精确串 (To Match)</label>
+                    <input type="text" name="route_to" value="alert@domain.com" required>
+                </div>
+            </div>
+            <div class="grid">
+                <div class="form-group">
+                    <label>目标 Webhook API 端点</label>
+                    <input type="url" name="route_webhook_url" value="" required>
+                </div>
+                <div class="form-group">
+                    <label>请求 Method</label>
+                    <select name="route_method"><option value="POST">POST</option><option value="PUT">PUT</option></select>
+                </div>
+            </div>
+            <div class="grid">
+                <div class="form-group">
+                    <label>正文抽取清洗模式</label>
+                    <select name="route_body_mode"><option value="html_prefer">html_prefer</option><option value="text_only">text_only</option></select>
+                </div>
+                <div class="form-group">
+                    <label>普通附件存储后端指派</label>
+                    <select name="route_attach_store"><option value="ignore">ignore</option><option value="tg_storage">tg_storage</option></select>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>自定义可编排业务 Body 模板</label>
+                <textarea name="route_body" rows="6" placeholder='{"chat_id":"987xxx","text":"Trace: {uuid}\nSubject: {subject}"}' required></textarea>
+            </div>
+            {{end}}
+        </section>
+
+        <button type="submit" class="btn">💾 保存并热重载线上数据链路</button>
+    </form>
+</main>
+</body>
+</html>

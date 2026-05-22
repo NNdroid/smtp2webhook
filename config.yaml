@@ -1,0 +1,156 @@
+# ==============================================================================
+# SECTION 1: 核心基础服务配置 (SERVER SETTINGS)
+# ==============================================================================
+server:
+  # 服务监听的网络地址和端口。
+  # 提示：若直接暴露于公网且有公网 IP，可写 "0.0.0.0:25"；
+  # 内网穿透或挂载 Nginx 转发、本地测试推荐使用非 root 端口 "0.0.0.0:2525"。
+  addr: "0.0.0.0:2525"
+
+  # SMTP 握手阶段宣告的域名 (HELO/EHLO Domain)。
+  # 建议配置为发送方能反向解析的真实域名或主机名。
+  domain: "mail.yourcompany.com"
+
+  # 限制单封邮件在流传输阶段的最大允许体积（单位：字节 Byte）。
+  # 15728640 Byte = 15MB。
+  # [安全防御] 务必限制此值！恶意攻击者若连续投递数 GB 的邮件会引发服务器内存爆溢 (OOM)。
+  max_message_bytes: 15728640
+
+  # 是否开启客户端发信账号密码认证 (AUTH)。
+  #   true  -> 客户端必须在发信前执行 AUTH LOGIN/PLAIN 进行鉴权，否则直接拒绝投递。
+  #   false -> 允许匿名发信（Open Relay 模式，若在公网极易被黑客用来疯狂发垃圾邮件）。
+  auth_enabled: true
+
+  log_level: "debug"
+
+  # 可视化配置后台的监听地址（配置为 127.0.0.1 可以防止外部恶意修改你的路由）
+  web_addr: "0.0.0.0:8080" 
+
+
+# ==============================================================================
+# SECTION 2: 客户端发信账号与发件人白名单绑定 (CREDENTIALS)
+# ==============================================================================
+# 注意：此节点为数组列表，支持配置多个不同的发信业务系统，达到“凭证隔离”目的。
+credentials:
+  - username: "app_service"                       # 发信连接时所用的 SMTP 用户名
+    password: "SuperSecurePassword123"            # 发信连接时所用的 SMTP 密码
+    
+    # [发件人身份绑定 (Sender Alignment) 防线]
+    # 限制该账号登录成功后，允许其使用的发件人(MAIL FROM)邮箱。此项属于数组，支持多条规则。
+    allowed_senders:
+      - match: "notification@yourdomain.com"      # 规则A：精确允许使用该系统通知邮箱
+        is_regexp: false
+      - match: "^alert-.*@yourdomain\\.com$"       # 规则B：正则表达式，允许代表任意告警后缀邮箱发信
+        is_regexp: true
+
+  - username: "hr_system"
+    password: "AnotherSecretPassword456"
+    allowed_senders:
+      - match: ".*@hr-group\\.local$"             # 仅允许使用 HR 内部域名的邮箱
+        is_regexp: true
+
+
+# ==============================================================================
+# SECTION 3: 离散附件与内联图片存储后端集群 (STORAGES)
+# ==============================================================================
+# 当路由策略中的存储引擎指定为对应名称时，网关会在收到邮件的第一时间将附件、贴图
+# 抽取出来并采用多线程/多表单形式自动推送到这些独立的第三方文件通道。
+storages:
+  # 【后端 A 示例】：Telegram Bot 专用流式文件上传通道
+  - name: "tg_storage"                            # 存储后端的唯一标识名称，供下方路由调用
+    type: "api_form"                              # 存储类型：api_form（Multipart 标准表单上传）
+    upload_url: "https://api.telegram.org/bot123456:ABCxxx/sendDocument" # 目标文件服务器API
+    file_field: "document"                        # 目标 API 规定的承载文件二进制流的 Form 字段名
+    # 额外附加的文本表单字段（将与二进制文件一同打包在 multipart/form-data 中发送）
+    extra_fields:
+      chat_id: "987654321"                        # 目标 Telegram 接收频道/群组 ID
+      # 备注字段支持 {uuid} 占位符，文件传上去后能在群组里通过 UUID 钢印精准回溯
+      caption: "📎 附件所属邮件追踪 ID: {uuid}"
+
+  # 【后端 B 示例】：兼容标准 AWS S3 / 阿里云 OSS / MinIO 的预留挂载路径
+  - name: "company_oss"
+    type: "oss"                                   # 存储类型：oss
+    # 路径中支持注入 {uuid} 占位符，实现按“一邮件一目录”的结构化存储隔离
+    upload_url: "https://your-bucket.oss-cn-hangzhou.aliyuncs.com/mail-assets/{uuid}/"
+
+
+# ==============================================================================
+# SECTION 4: 兜底默认路由规则 (DEFAULT WEBHOOK)
+# ==============================================================================
+# 当且仅当邮件进来后，下方 Section 5 的级联路由规则没有任何一条命中的时候，
+# 系统会无缝滑向这条兜底规则，防止邮件在中途断流。
+default_webhook:
+  url: "https://api.yourdomain.com/webhooks/default"
+  method: "POST"
+  headers:
+    "Content-Type": "application/json"
+  body_template: |
+    {
+      "event": "unrouted_mail",
+      "trace_id": "{uuid}",
+      "sender": "{from}",
+      "text": "{text_prefer}"
+    }
+
+
+# ==============================================================================
+# SECTION 5: 级联双向路由规则与高级工作流编排 (ROUTES)
+# ==============================================================================
+# 引擎工作机理：按【从上到下】的物理顺序依此检索匹配，一旦匹配成功立即执行对应的 Webhook
+# 并中断后续规则的匹配（短路逻辑）。
+routes:
+  # ----------------------------------------------------------------------------
+  # 场景 1：精准匹配收件人并多设备离散上传分发到 Telegram
+  # ----------------------------------------------------------------------------
+  - from_match: ""                                # 留空代表不限制发件人（通配）
+    from_is_regexp: false
+    to_match: "tg-workflow@yourdomain.com"        # 只有当邮件发送到此特定中转邮箱时才命中
+    to_is_regexp: false
+    webhook:
+      # 在 Webhook 的 URL 中可以直接带上当前邮件流的唯一 ID（可用于下游数据库的幂等去重）
+      url: "https://api.telegram.org/bot123456:ABCxxx/sendMessage?mail_trace={uuid}"
+      method: "POST"
+      headers:
+        "Content-Type": "application/json"
+        "X-Mail-Trace-ID": "{uuid}"               # 在自定义 HTTP Header 中注入连环指纹
+      
+      # 精细化高级加工策略 (Processing Strategy)
+      processing_strategy:
+        body_mode: "html_prefer"                  # 智能正文优先模式：html_prefer, text_only
+        attachment_storage: "tg_storage"           # 绑定普通附件（如大PDF、ZIP）推送到上述 tg_storage 后端
+        inline_image_storage: "tg_storage"         # 绑定正文内直接粘贴的截图（Inline 图片）也推送到 tg_storage
+
+      # 自定义请求体模板 (Body Template)
+      # ！！！由于邮件正文极易包含各种奇葩的多行换行、特殊双引号、反斜杠等，
+      # 网关内部会自动使用 json.Marshal 执行最高等级的 JSON 安全字符转义，保证拼装后的 JSON 绝对不会崩塌。
+      body_template: |
+        {
+          "chat_id": "987654321",
+          "parse_mode": "HTML",
+          "text": "<b>📬 收到新邮件通知</b>\n<b>追踪ID:</b> <code>{uuid}</code>\n<b>发件人:</b> {from}\n<b>主题:</b> {subject}\n\n<b>智能提取正文:</b>\n{text_prefer}"
+        }
+
+  # ----------------------------------------------------------------------------
+  # 场景 2：双重联合鉴权路由分发（多条件 AND 匹配）
+  # ----------------------------------------------------------------------------
+  # 只有当“发件人来自外部特定报警源”且“收件人发往数据库运维邮箱”时，才将全量 JSON 注入公司 CRM。
+  - from_match: "^alert-.*@external-monitor\\.com$"
+    from_is_regexp: true
+    to_match: "db-ops@yourdomain.com"
+    to_is_regexp: false
+    webhook:
+      url: "https://crm.yourcompany.com/api/v2/mails"
+      method: "PUT"                               # 支持奇葩系统的 PUT/PATCH 提交
+      headers:
+        "X-Secure-Token": "CRM-SYSTEM-SECRET-KEY" # 注入系统所需的安全令牌
+      processing_strategy:
+        body_mode: "text_only"                    # 全剥离，只要文字
+        attachment_storage: "company_oss"         # 大附件直接转存到 OSS，Webhook 的 payload 里只传它的公开 URL
+        inline_image_storage: "ignore"             # 直接丢弃正文里的截图，减轻数据库网络带宽压力
+      body_template: |
+        {
+          "mail_uuid": "{uuid}",
+          "sender_address": "{from}",
+          "mail_subject": "{subject}",
+          "raw_body": "{text}"
+        }
